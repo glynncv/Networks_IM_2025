@@ -1,0 +1,30 @@
+# Virtual Environment
+venv/
+.venv/
+env/
+ENV/
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.Python
+*.so
+.pytest_cache/
+
+# Jupyter
+.ipynb_checkpoints/
+
+# Data files (be careful with sensitive data)
+data/raw/*.csv
+data/raw/*.xlsx
+*.log
+
+# OS
+.DS_Store
+Thumbs.db
+
+*.pem
+config.ini
+.env 
