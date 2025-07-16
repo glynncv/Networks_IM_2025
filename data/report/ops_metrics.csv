@@ -1,0 +1,5 @@
+run_timestamp_utc,rows_raw,rows_filtered,pct_invalid_timestamps,neg_resolution_intervals,sla_breach_pct,breach_count,top_breach_category,avg_breach_time_hrs
+2025-07-10 16:05:08.331220+00:00,376,376,6.38,0,52.66,198,WiFi_Connection,152.45959595959596
+2025-07-10 16:39:00.465235+00:00,376,376,6.38,0,52.66,198,WiFi_Connection,152.46,26,18,37.54
+2025-07-15 08:14:13.398980+00:00,380,380,3.6799999999999997,0,55.26,210,WiFi_Connection,154.62,16,19,119.14
+2025-07-15 08:18:04.210246+00:00,380,380,3.6799999999999997,0,55.26,210,WiFi_Connection,154.62,16,19,119.21

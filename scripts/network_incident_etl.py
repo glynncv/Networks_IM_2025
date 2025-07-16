@@ -2,10 +2,12 @@
 Clean and enrich ServiceNow network‑incident extracts **and** emit
 pipeline‑health metrics for operational monitoring.
 
-Key additions (July 2025)
+Key additions (July 2025)
 ------------------------
 * **Metadata logging** – row counts, data‑quality errors, and SLA‑breach rate
   are computed and pushed to a monitoring sink (DB table, CSV, or logger).
+* **SLA Analysis** – detailed breach analysis for operational insights
+* **Configuration Management** – externalized settings via config.py
 
 Usage
 -----
@@ -30,6 +32,9 @@ from typing import Dict, List, Tuple
 import numpy as np
 import pandas as pd
 
+# 🆕 Configuration import
+from config import IMPLEMENTATION_START, BUSINESS_HOURS, SLA_TARGETS, ALERT_THRESHOLDS
+
 # ──────────────────────────────────────────────────────────
 # 0  -- LOGGER CONFIG
 # ──────────────────────────────────────────────────────────
@@ -39,14 +44,17 @@ logger.setLevel(logging.INFO)
 # ──────────────────────────────────────────────────────────
 # 1  -- CONFIGURATION
 # ──────────────────────────────────────────────────────────
-IMPLEMENTATION_START = pd.Timestamp("2025-03-25", tz="UTC")
+# IMPLEMENTATION_START is now imported from config.py
 
 class Sev(Enum):
     CRIT = "1 - Critical"
     HIGH = "2 - High"
 
+# 🆕 Business hours from config
 BUS_HOURS = pd.offsets.CustomBusinessHour(
-    start="08:00", end="17:00", weekmask="Mon Tue Wed Thu Fri"
+    start=BUSINESS_HOURS["start"], 
+    end=BUSINESS_HOURS["end"], 
+    weekmask=BUSINESS_HOURS["weekmask"]
 )
 
 @dataclass(frozen=True)
@@ -197,9 +205,9 @@ def transform_incident_frame(df_raw: pd.DataFrame) -> pd.DataFrame:
         df["patternCategory"], df["priority"], df["short_description"]
     )
 
-    # ---------- SLA breach example ----------
-    SLA_TARGET_HRS = {"1 - Critical": 4, "2 - High": 8, "3 - Moderate": 16}
-    df["slaTargetHrs"] = df["priority"].map(SLA_TARGET_HRS).fillna(24)
+    # ---------- SLA breach analysis ----------
+    # 🆕 Using SLA targets from config
+    df["slaTargetHrs"] = df["priority"].map(SLA_TARGETS).fillna(24)
     df["slaBreach"] = (df["resolutionTimeBizHrs"] > df["slaTargetHrs"]) & (
         df["resolvedDate"].notna()
     )
@@ -208,21 +216,90 @@ def transform_incident_frame(df_raw: pd.DataFrame) -> pd.DataFrame:
 
 
 # ──────────────────────────────────────────────────────────
-# 4  -- METADATA / PIPELINE‑HEALTH LOGGING
+# 4  -- SLA ANALYSIS FUNCTIONS
+# ──────────────────────────────────────────────────────────
+
+def analyze_sla_breaches(df: pd.DataFrame) -> dict:
+    """Generate detailed SLA breach analysis for operational review."""
+    breaches = df[df['slaBreach'] == True]
+    
+    if len(breaches) == 0:
+        return {"message": "No SLA breaches found"}
+    
+    analysis = {
+        'total_breaches': len(breaches),
+        'breach_rate': len(breaches) / len(df[df['resolvedDate'].notna()]),
+        'breach_by_category': breaches['patternCategory'].value_counts().to_dict(),
+        'breach_by_priority': breaches['priority'].value_counts().to_dict(),
+        'avg_breach_time_hrs': breaches['resolutionTimeBizHrs'].mean(),
+        'worst_cases': breaches.nlargest(5, 'resolutionTimeBizHrs')[
+            ['id_hash', 'patternCategory', 'priority', 'resolutionTimeBizHrs']
+        ].to_dict('records')
+    }
+    return analysis
+
+
+def generate_alerts(df: pd.DataFrame) -> List[str]:
+    """Generate operational alerts based on thresholds."""
+    alerts = []
+    
+    # SLA breach rate alert
+    resolved_incidents = df[df['resolvedDate'].notna()]
+    if len(resolved_incidents) > 0:
+        breach_rate = df['slaBreach'].sum() / len(resolved_incidents) * 100
+        if breach_rate > ALERT_THRESHOLDS["sla_breach_rate_pct"]:
+            alerts.append(f"🔴 SLA breach rate: {breach_rate:.1f}% (threshold: {ALERT_THRESHOLDS['sla_breach_rate_pct']}%)")
+    
+    # High impact active incidents
+    active_high_impact = df[(df['isActive'] == True) & (df['isHighImpact'] == True)]
+    if len(active_high_impact) > ALERT_THRESHOLDS["active_high_impact_max"]:
+        alerts.append(f"⚠️ Active high impact incidents: {len(active_high_impact)} (threshold: {ALERT_THRESHOLDS['active_high_impact_max']})")
+    
+    # Data freshness
+    if len(df) > 0:
+        latest_incident = df['openedDate'].max()
+        hours_since_latest = (datetime.now(timezone.utc) - latest_incident).total_seconds() / 3600
+        if hours_since_latest > ALERT_THRESHOLDS["data_freshness_hrs"]:
+            alerts.append(f"📅 Data freshness: {hours_since_latest:.1f} hours old (threshold: {ALERT_THRESHOLDS['data_freshness_hrs']}hrs)")
+    
+    # Average breach time
+    breaches = df[df['slaBreach'] == True]
+    if len(breaches) > 0:
+        avg_breach_time = breaches['resolutionTimeBizHrs'].mean()
+        if avg_breach_time > ALERT_THRESHOLDS["avg_breach_time_hrs"]:
+            alerts.append(f"⏱️ Average breach time: {avg_breach_time:.1f}hrs (threshold: {ALERT_THRESHOLDS['avg_breach_time_hrs']}hrs)")
+    
+    return alerts
+
+
+# ──────────────────────────────────────────────────────────
+# 5  -- METADATA / PIPELINE‑HEALTH LOGGING
 # ──────────────────────────────────────────────────────────
 
 def _compute_metrics(df_raw: pd.DataFrame, df_clean: pd.DataFrame) -> pd.DataFrame:
     """Return a one‑row dataframe of pipeline metrics."""
+    
+    # Get SLA analysis
+    sla_analysis = analyze_sla_breaches(df_clean)
+    
     metrics = {
         "run_timestamp_utc": datetime.now(timezone.utc),
         "rows_raw": len(df_raw),
         "rows_filtered": len(df_clean),
-        "pct_invalid_timestamps": (
-            df_raw["resolved"].isna().mean().round(4) * 100
-        ),
+        "pct_invalid_timestamps": (df_raw["resolved"].isna().mean().round(4) * 100),
         "neg_resolution_intervals": ((pd.to_datetime(df_raw["resolved"], errors="coerce", utc=True)
                                         < pd.to_datetime(df_raw["opened"], errors="coerce", utc=True)).sum()),
         "sla_breach_pct": (df_clean["slaBreach"].mean().round(4) * 100),
+        
+        # 🆕 Enhanced SLA insights
+        "breach_count": sla_analysis.get('total_breaches', 0),
+        "top_breach_category": list(sla_analysis.get('breach_by_category', {}).keys())[0] if sla_analysis.get('breach_by_category') else 'None',
+        "avg_breach_time_hrs": round(sla_analysis.get('avg_breach_time_hrs', 0), 2),
+        
+        # 🆕 Operational metrics
+        "active_incidents": df_clean['isActive'].sum(),
+        "high_impact_incidents": df_clean['isHighImpact'].sum(),
+        "data_freshness_hrs": round((datetime.now(timezone.utc) - df_clean['openedDate'].max()).total_seconds() / 3600, 2) if len(df_clean) > 0 else 0,
     }
     return pd.DataFrame([metrics])
 
@@ -264,7 +341,7 @@ def log_pipeline_metrics(
 
 
 # ──────────────────────────────────────────────────────────
-# 5  -- REPEATING‑PATTERN SUMMARY (unchanged)
+# 6  -- REPEATING‑PATTERN SUMMARY
 # ──────────────────────────────────────────────────────────
 
 def pattern_summary(df: pd.DataFrame) -> pd.DataFrame:
@@ -292,6 +369,10 @@ def pattern_summary(df: pd.DataFrame) -> pd.DataFrame:
     )
 
 
+# ──────────────────────────────────────────────────────────
+# 7  -- MAIN EXECUTION
+# ──────────────────────────────────────────────────────────
+
 if __name__ == "__main__":
     import pandas as pd
     import os
@@ -312,7 +393,10 @@ if __name__ == "__main__":
     input_filename = os.path.basename(input_path)
     name_without_ext = os.path.splitext(input_filename)[0]
     output_path = os.path.join("data", "processed", f"{name_without_ext}_clean.csv")
-    metrics_path = "ops_metrics.csv"
+    
+    # Ensure data/report directory exists and set metrics path
+    os.makedirs(os.path.join("data", "report"), exist_ok=True)
+    metrics_path = os.path.join("data", "report", "ops_metrics.csv")
 
     # Read from data/raw, handling CSV and Excel
     ext = os.path.splitext(input_path)[1].lower()
@@ -332,6 +416,41 @@ if __name__ == "__main__":
     tidy_df.to_csv(output_path, index=False)
     print(f"Processed file saved to {output_path}")
 
-    # Log metrics
+    # 🆕 SLA Analysis with enhanced output
+    print("\n" + "="*60)
+    print("📊 SLA BREACH ANALYSIS")
+    print("="*60)
+    
+    sla_analysis = analyze_sla_breaches(tidy_df)
+    
+    if 'message' in sla_analysis:
+        print("✅ " + sla_analysis['message'])
+    else:
+        print(f"Total Incidents Analyzed: {len(tidy_df)}")
+        print(f"Resolved Incidents: {len(tidy_df[tidy_df['resolvedDate'].notna()])}")
+        print(f"SLA Breaches: {sla_analysis['total_breaches']}")
+        print(f"Breach Rate: {sla_analysis['breach_rate']*100:.1f}%")
+        print(f"Average Breach Time: {sla_analysis['avg_breach_time_hrs']:.1f} hours")
+        
+        print(f"\nTop Breach Categories:")
+        for category, count in list(sla_analysis['breach_by_category'].items())[:5]:
+            print(f"  {category}: {count}")
+        
+        print(f"\nBreaches by Priority:")
+        for priority, count in sla_analysis['breach_by_priority'].items():
+            print(f"  {priority}: {count}")
+
+    # 🆕 Generate and display alerts
+    alerts = generate_alerts(tidy_df)
+    if alerts:
+        print(f"\n⚠️ OPERATIONAL ALERTS:")
+        for alert in alerts:
+            print(f"  {alert}")
+    else:
+        print(f"\n✅ No operational alerts - system performing within thresholds")
+
+    # Log enhanced metrics
+    print(f"\n📊 Logging enhanced metrics to {metrics_path}")
     log_pipeline_metrics(raw_df, tidy_df, engine, csv_fallback=metrics_path)
-    print(f"Metrics logged to {metrics_path} (or database if engine is set).")
+    print("Processing complete!")
+    print("="*60)
