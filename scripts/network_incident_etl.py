@@ -166,12 +166,18 @@ def transform_incident_frame(df_raw: pd.DataFrame) -> pd.DataFrame:
     """
     df = df_raw.copy()
 
+    # ---------- Column name mapping for different CSV formats ----------
+    # Handle different column naming conventions
+    opened_col = "opened_at" if "opened_at" in df.columns else "opened"
+    resolved_col = "u_resolved" if "u_resolved" in df.columns else "resolved"
+    ci_type_col = "u_ci_type" if "u_ci_type" in df.columns else "ci_type"
+
     # ---------- Filtering ----------
     df = df[df["assignment_group"].str.contains("network", case=False, na=False)]
 
     # ---------- Timestamp parsing ----------
-    df["openedDate"] = pd.to_datetime(df["opened"], errors="coerce", utc=True)
-    df["resolvedDate"] = pd.to_datetime(df["resolved"], errors="coerce", utc=True)
+    df["openedDate"] = pd.to_datetime(df[opened_col], errors="coerce", utc=True)
+    df["resolvedDate"] = pd.to_datetime(df[resolved_col], errors="coerce", utc=True)
 
     # ---------- Sanity checks ----------
     bad_ts = df["resolvedDate"] < df["openedDate"]
@@ -194,7 +200,7 @@ def transform_incident_frame(df_raw: pd.DataFrame) -> pd.DataFrame:
     ).clip(lower=12)
 
     # ---------- Categorisation ----------
-    df["patternCategory"] = _categorize_series(df["short_description"], df["ci_type"])
+    df["patternCategory"] = _categorize_series(df["short_description"], df[ci_type_col])
 
     # ---------- Flags ----------
     df["isActive"] = df["incident_state"].isin(["In Progress", "On Hold", "New"])
@@ -392,7 +398,7 @@ if __name__ == "__main__":
     # Generate output path based on input filename
     input_filename = os.path.basename(input_path)
     name_without_ext = os.path.splitext(input_filename)[0]
-    output_path = os.path.join("data", "processed", f"{name_without_ext}_clean.csv")
+    output_path = os.path.join("data", "processed", f"{name_without_ext}_analysed.csv")
     
     # Ensure data/report directory exists and set metrics path
     os.makedirs(os.path.join("data", "report"), exist_ok=True)

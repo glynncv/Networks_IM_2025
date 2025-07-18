@@ -6,7 +6,7 @@ from network_incident_etl import analyze_sla_breaches
 
 def main():
     # Load your existing processed data
-    df = pd.read_csv("data/processed/IM_Network_EMEA_2025_analyzed_clean_clean.csv")
+    df = pd.read_csv("data/processed/IM_Network_EMEA_2025_redacted_clean_analysed.csv")
     
     print(f"📊 Analyzing {len(df)} incidents...")
     

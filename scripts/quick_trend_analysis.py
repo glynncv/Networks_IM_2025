@@ -11,7 +11,7 @@ import numpy as np
 
 def load_data():
     """Load and prepare data for trend analysis"""
-    df = pd.read_csv("data/processed/IM_Network_EMEA_2025_analyzed_clean_clean.csv")
+    df = pd.read_csv("data/processed/IM_Network_EMEA_2025_redacted_clean_analysed.csv")
     df['openedDate'] = pd.to_datetime(df['openedDate'])
     df['resolvedDate'] = pd.to_datetime(df['resolvedDate'])
     return df
